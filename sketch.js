@@ -32,13 +32,15 @@ const frag = `
 precision mediump float;
 
 uniform sampler2D uTex;
-uniform float uPhase;      
-uniform float uEdge;       
-uniform float uEarth;      
-uniform float uDiffuse;    
-uniform float uSpec;       
-uniform float uShine;      
-uniform vec3 uLightDir;   
+uniform float uPhase;
+uniform float uEdge;
+uniform float uEarth;
+uniform float uDiffuse;
+uniform float uSpec;
+uniform float uShine;
+uniform vec3 uLightDir;
+uniform vec3 uMoonColor;
+uniform float uFlip;
 
 varying vec3 vN;
 varying vec2 vUV;
@@ -49,7 +51,7 @@ void main() {
 
   float fullness = 1.0 - abs(uPhase - 0.5) * 2.0;
   float threshold = mix(1.0, -1.0, fullness);
-  float litMask = smoothstep(threshold, threshold + uEdge, n.x);
+  float litMask = smoothstep(threshold, threshold + uEdge, n.x * uFlip);
 
   vec3 tex = texture2D(uTex, vUV).rgb;
 
@@ -66,9 +68,17 @@ void main() {
   }
 
   float light = mix(uEarth, uEarth + diffuse, litMask);
-  vec3 col = tex * light + vec3(specular * litMask);
 
-  gl_FragColor = vec4(col, 1.0);
+  vec3 baseColor = tex * light * uMoonColor;
+  vec3 specColor = vec3(specular * litMask);
+
+
+  float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+  vec3 glowColor = vec3(0.4, 0.7, 1.0) * rim * 0.6;
+
+  vec3 finalColor = baseColor + specColor + glowColor;
+
+  gl_FragColor = vec4(finalColor, 1.0);
 }
 `;
 
@@ -129,23 +139,21 @@ function draw() {
 
   camera(mx * 140, my * 80, 980, 0, 0, 0, 0, 1, 0);
 
-  // stars
   for (const s of stars) {
     push();
     translate(s.x, s.y, s.z);
-    const tw = 0.75 + 0.25 * sin(frameCount * 0.02 + s.x * 0.001 + s.y * 0.001);
+    const tw = 0.75 + 0.25 * sin(frameCount * 0.02 + s.x * 0.001);
     emissiveMaterial(s.b * tw);
     sphere(s.r, 6, 6);
     pop();
   }
 
-  const countMoons = 17;
+  const countMoons = 30;
   const baseSize = min(width, height) * 0.10;
   const spacing = baseSize * 1.75;
   const startX = -((countMoons - 1) * spacing) / 2;
 
   const scrubPhase = map(constrain(mouseX, 0, width), 0, width, 0, 30);
-
   const lightDir = normalize3([0.9 + mx * 0.2, 0.15 + my * 0.2, 0.6]);
   const mid = (countMoons - 1) / 2;
 
@@ -159,17 +167,61 @@ function draw() {
     const d = abs(i - mid) / mid;
     const bell = exp(-d * d * 1.6);
 
+    const fullness = 1.0 - abs(p - 15.0) / 15.0;
+
+
+let moonColor;
+
+const baseIvory = [1.0, 0.97, 0.88];
+const blueTint   = [0.85, 0.92, 1.0];
+const copperTint = [1.0, 0.85, 0.7];
+const graySky    = [0.82, 0.87, 0.92];
+const darkShadow = [0.6, 0.65, 0.7];
+
+
+if (fullness > 0.8) {
+  moonColor = lerpArray(baseIvory, copperTint, 0.25);
+}
+else if (fullness > 0.5) {
+  moonColor = lerpArray(baseIvory, graySky, 0.5);
+}
+else if (fullness > 0.25) {
+  moonColor = lerpArray(graySky, blueTint, 0.4);
+}
+else {
+  moonColor = darkShadow;
+}
+
+
+const colorNoise = sin(i * 0.7 + frameCount * 0.01) * 0.05;
+
+moonColor = [
+  constrain(moonColor[0] + colorNoise, 0, 1),
+  constrain(moonColor[1] + colorNoise, 0, 1),
+  constrain(moonColor[2] + colorNoise, 0, 1)
+];
+
+    const worldDistanceFromCenter = x / ((countMoons * spacing) / 2);
+const flip = worldDistanceFromCenter < 0 ? -1.0 : 1.0;
+
     push();
     translate(x, -18 * bell, lerp(-340, -60, bell));
     rotateY(0.22 + sin(frameCount * 0.004 + i) * 0.05);
     rotateX(-0.08);
 
-    drawMoon3D(baseSize * lerp(0.78, 1.55, bell), p, lightDir);
+    drawMoon3D(
+      baseSize * lerp(0.78, 1.55, bell),
+      p,
+      lightDir,
+      moonColor,
+      flip
+    );
+
     pop();
   }
 }
 
-function drawMoon3D(size, phase0to30, lightDir) {
+function drawMoon3D(size, phase0to30, lightDir, moonColor, flip) {
   shader(moonShader);
   moonShader.setUniform("uTex", moonTex);
   moonShader.setUniform("uPhase", constrain(phase0to30 / 30.0, 0, 1));
@@ -179,6 +231,8 @@ function drawMoon3D(size, phase0to30, lightDir) {
   moonShader.setUniform("uSpec", 0.55);
   moonShader.setUniform("uShine", 28.0);
   moonShader.setUniform("uLightDir", lightDir);
+  moonShader.setUniform("uMoonColor", moonColor);
+  moonShader.setUniform("uFlip", flip);
 
   sphere(size * 0.5, 72, 72);
   resetShader();
@@ -187,4 +241,11 @@ function drawMoon3D(size, phase0to30, lightDir) {
 function normalize3(v) {
   const m = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]) || 1;
   return [v[0]/m, v[1]/m, v[2]/m];
+}
+function lerpArray(a, b, t) {
+  return [
+    lerp(a[0], b[0], t),
+    lerp(a[1], b[1], t),
+    lerp(a[2], b[2], t)
+  ];
 }
